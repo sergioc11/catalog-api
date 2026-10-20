@@ -34,83 +34,21 @@ let nextId = Math.max(...products.map(p => p.id)) + 1;
 const successResponse = (message, data = null) => ({ success: true, message, data, error: false, errors: [] });
 const errorResponse = (message, errors = []) => ({ success: false, message, data: null, error: true, errors });
 
-// ---------- Errores ----------
-// Error con código HTTP. Se lanza con throw y lo responde el manejador global (al final del archivo).
-class AppError extends Error {
-    constructor(status, message, errors = []) {
-        super(message);
-        this.status = status;
-        this.errors = errors;
-    }
-}
-
-// Busca un producto por el id de la URL: 400 si el id no es numérico, 404 si no existe
-function findProduct(idParam) {
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) throw new AppError(400, 'El id debe ser numérico', [`id recibido: ${idParam}`]);
-
-    const product = products.find(p => p.id === id);
-    if (!product) throw new AppError(404, `No existe un producto con id ${id}`);
-    return product;
-}
-
-// ---------- Validación (middlewares) ----------
-// Reglas de formato: aplican a crear y a actualizar, solo sobre los campos que llegan
-function checkFormat({ name, price, stock, categoryId }) {
-    const errors = [];
-    if (name !== undefined && !String(name).trim()) errors.push('El campo name no puede estar vacío');
-    if (price !== undefined && (isNaN(price) || price < 0)) errors.push('El campo price debe ser un número mayor o igual a 0');
-    if (stock !== undefined && (isNaN(stock) || stock < 0)) errors.push('El campo stock debe ser un número mayor o igual a 0');
-    if (categoryId && !categories.some(c => c.id === Number(categoryId))) errors.push(`La categoría ${categoryId} no existe`);
-    return errors;
-}
-
-// POST: campos obligatorios + formato
-function validateCreate(req, res, next) {
-    const body = req.body ?? {};
-    const errors = [];
-    if (body.name === undefined) errors.push('El campo name es obligatorio');
-    if (body.price === undefined) errors.push('El campo price es obligatorio');
-    if (!body.categoryId) errors.push('El campo categoryId es obligatorio');
-    errors.push(...checkFormat(body));
-
-    if (errors.length) throw new AppError(400, 'Los datos del producto no son válidos', errors);
-    next();
-}
-
-// PUT: al menos un campo + formato (los campos son opcionales)
-function validateUpdate(req, res, next) {
-    const body = req.body ?? {};
-    if (!Object.keys(body).length) throw new AppError(400, 'Debes enviar al menos un campo para actualizar');
-
-    const errors = checkFormat(body);
-    if (errors.length) throw new AppError(400, 'Los datos del producto no son válidos', errors);
-    next();
-}
-
 // ---------- Endpoints ----------
 // Todas las rutas cuelgan de BASE_PATH (ver app.use más abajo)
-//   GET    /categories      -> 200
-//   GET    /products        -> 200 (lista vacía también es 200) | 400 (filtro inválido)
-//   GET    /products/:id    -> 200 | 400 | 404
-//   POST   /products        -> 201 | 400
-//   PUT    /products/:id    -> 200 | 400 | 404
-//   DELETE /products/:id    -> 200 | 400 | 404
 const router = express.Router();
 
+// GET /categories -> 200
 router.get('/categories', (req, res) => {
     res.status(200).json(successResponse('La consulta de categorías fue exitosa', categories));
 });
 
-// Filtros opcionales: ?categoryId=1&name=tec
+// GET /products?categoryId=1&name=tec -> 200 (filtros opcionales; una lista vacía también es 200)
 router.get('/products', (req, res) => {
     const { categoryId, name } = req.query;
-    if (categoryId !== undefined && !Number.isInteger(Number(categoryId))) throw new AppError(400, 'El filtro categoryId debe ser numérico');
-    if (name !== undefined && typeof name !== 'string') throw new AppError(400, 'El filtro name debe ser un texto');
-
     let result = products;
     if (categoryId) result = result.filter(p => p.categoryId === Number(categoryId));
-    if (name) result = result.filter(p => p.name.toLowerCase().includes(name.toLowerCase()));
+    if (name) result = result.filter(p => p.name.toLowerCase().includes(String(name).toLowerCase()));
 
     const message = result.length
         ? 'La consulta al catálogo de productos fue exitosa'
@@ -118,55 +56,75 @@ router.get('/products', (req, res) => {
     res.status(200).json(successResponse(message, result));
 });
 
+// GET /products/:id -> 200 | 404
 router.get('/products/:id', (req, res) => {
-    const product = findProduct(req.params.id);
+    const product = products.find(p => p.id === Number(req.params.id));
+    if (!product) {
+        return res.status(404).json(errorResponse(`No existe un producto con id ${req.params.id}`));
+    }
     res.status(200).json(successResponse('Producto encontrado', product));
 });
 
-router.post('/products', validateCreate, (req, res) => {
-    const { name, price, stock, categoryId } = req.body;
+// POST /products -> 201 | 400
+router.post('/products', (req, res) => {
+    const { name, price, stock, categoryId } = req.body ?? {};
+    const errors = [];
+    if (!name) errors.push('El campo name es obligatorio');
+    if (price == null) errors.push('El campo price es obligatorio');
+    if (!categoryId) errors.push('El campo categoryId es obligatorio');
+    else if (!categories.some(c => c.id === Number(categoryId))) errors.push(`La categoría ${categoryId} no existe`);
+    if (errors.length) {
+        return res.status(400).json(errorResponse('Los datos del producto no son válidos', errors));
+    }
+
     const newProduct = { id: nextId++, name, price: Number(price), stock: Number(stock ?? 0), categoryId: Number(categoryId) };
     products.push(newProduct);
     res.status(201).json(successResponse('Producto creado correctamente', newProduct));
 });
 
-router.put('/products/:id', validateUpdate, (req, res) => {
-    const product = findProduct(req.params.id);
-    const { name, price, stock, categoryId } = req.body;
-    if (name !== undefined) product.name = name;
-    if (price !== undefined) product.price = Number(price);
-    if (stock !== undefined) product.stock = Number(stock);
-    if (categoryId !== undefined) product.categoryId = Number(categoryId);
+// PUT /products/:id -> 200 | 400 | 404   (solo actualiza los campos enviados)
+router.put('/products/:id', (req, res) => {
+    const product = products.find(p => p.id === Number(req.params.id));
+    if (!product) {
+        return res.status(404).json(errorResponse(`No existe un producto con id ${req.params.id}`));
+    }
+
+    const { name, price, stock, categoryId } = req.body ?? {};
+    if (categoryId != null && !categories.some(c => c.id === Number(categoryId))) {
+        return res.status(400).json(errorResponse('Los datos del producto no son válidos', [`La categoría ${categoryId} no existe`]));
+    }
+
+    if (name != null) product.name = name;
+    if (price != null) product.price = Number(price);
+    if (stock != null) product.stock = Number(stock);
+    if (categoryId != null) product.categoryId = Number(categoryId);
     res.status(200).json(successResponse('Producto actualizado correctamente', product));
 });
 
+// DELETE /products/:id -> 200 | 404
 router.delete('/products/:id', (req, res) => {
-    const product = findProduct(req.params.id);
-    products.splice(products.indexOf(product), 1);
-    res.status(200).json(successResponse('Producto eliminado correctamente', product));
+    const index = products.findIndex(p => p.id === Number(req.params.id));
+    if (index === -1) {
+        return res.status(404).json(errorResponse(`No existe un producto con id ${req.params.id}`));
+    }
+    const deleted = products.splice(index, 1)[0];
+    res.status(200).json(successResponse('Producto eliminado correctamente', deleted));
 });
 
 app.use(BASE_PATH, router);
 
-// ---------- Manejo global de errores (siempre al final) ----------
+// ---------- Errores generales (siempre al final) ----------
 // 404: ninguna ruta coincidió
 app.use((req, res) => {
-    throw new AppError(404, `La ruta ${req.method} ${req.originalUrl} no existe`);
+    res.status(404).json(errorResponse(`La ruta ${req.method} ${req.originalUrl} no existe`));
 });
 
-// Todos los errores lanzados llegan aquí (4 parámetros = manejador de errores)
+// 400 / 500: JSON mal escrito en el body o cualquier error inesperado
 app.use((err, req, res, next) => {
-    // Errores esperados: los que lanzamos con AppError
-    if (err instanceof AppError) {
-        return res.status(err.status).json(errorResponse(err.message, err.errors));
-    }
-    // JSON mal formado en el body (lo detecta express.json)
-    if (err.type === 'entity.parse.failed') {
-        return res.status(400).json(errorResponse('El body de la petición no es un JSON válido'));
-    }
-    // Errores inesperados: el detalle solo se registra en el servidor, nunca se envía al cliente
     console.error(err);
-    res.status(500).json(errorResponse('Error interno del servidor'));
+    const status = err.status || 500;   // express.json() marca el JSON mal escrito con status 400
+    const message = status === 400 ? 'El body de la petición no es un JSON válido' : 'Error interno del servidor';
+    res.status(status).json(errorResponse(message));
 });
 
 app.listen(PORT, () => {
