@@ -1,0 +1,14 @@
+{
+  "categories": [
+    { "id": 1, "name": "Tecnología" },
+    { "id": 2, "name": "Hogar" },
+    { "id": 3, "name": "Ropa" }
+  ],
+  "products": [
+    { "id": 1, "name": "Monitor", "price": 200, "stock": 8, "categoryId": 1 },
+    { "id": 2, "name": "Audífonos", "price": 35, "stock": 20, "categoryId": 1 },
+    { "id": 3, "name": "Sartén", "price": 25, "stock": 12, "categoryId": 2 },
+    { "id": 4, "name": "Lámpara", "price": 30, "stock": 6, "categoryId": 2 },
+    { "id": 5, "name": "Chaqueta", "price": 60, "stock": 9, "categoryId": 3 }
+  ]
+}
